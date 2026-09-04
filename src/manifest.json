@@ -1,0 +1,31 @@
+{
+  "name": "桂平融媒考勤",
+  "appid": "",
+  "description": "桂平市融媒体中心员工考勤打卡",
+  "versionName": "1.0.0",
+  "versionCode": "100",
+  "vueVersion": "3",
+  "locale": "zh-Hans",
+  "app-plus": {
+    "usingComponents": true,
+    "nvueStyleCompiler": "uni-app",
+    "compilerVersion": 3,
+    "splashscreen": {
+      "alwaysShowBeforeRender": true,
+      "waiting": true,
+      "autoclose": true,
+      "delay": 0
+    },
+    "modules": {},
+    "distribute": {}
+  },
+  "h5": {
+    "title": "桂平融媒 · 员工考勤打卡",
+    "template": "index.html",
+    "publicPath": "./",
+    "router": {
+      "mode": "hash",
+      "base": "./"
+    }
+  }
+}

@@ -1,0 +1,47 @@
+{
+  "pages": [
+    {
+      "path": "pages/clock/clock",
+      "style": {
+        "navigationStyle": "custom",
+        "navigationBarTitleText": "考勤打卡"
+      }
+    },
+    {
+      "path": "pages/records/records",
+      "style": {
+        "navigationStyle": "custom",
+        "navigationBarTitleText": "打卡记录",
+        "enablePullDownRefresh": true,
+        "backgroundTextStyle": "dark"
+      }
+    }
+  ],
+  "tabBar": {
+    "color": "#7a8291",
+    "selectedColor": "#4096ff",
+    "backgroundColor": "#ffffff",
+    "borderStyle": "black",
+    "list": [
+      {
+        "pagePath": "pages/clock/clock",
+        "text": "打卡",
+        "iconPath": "static/tab-clock.png",
+        "selectedIconPath": "static/tab-clock-active.png"
+      },
+      {
+        "pagePath": "pages/records/records",
+        "text": "记录",
+        "iconPath": "static/tab-records.png",
+        "selectedIconPath": "static/tab-records-active.png"
+      }
+    ]
+  },
+  "globalStyle": {
+    "navigationStyle": "custom",
+    "navigationBarTextStyle": "black",
+    "navigationBarTitleText": "考勤打卡",
+    "navigationBarBackgroundColor": "#F8F8F8",
+    "backgroundColor": "#F8F8F8"
+  }
+}
