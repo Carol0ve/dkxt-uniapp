@@ -7,7 +7,6 @@
  * 只维护"内网连通性"状态（net），连通即可打卡。
  * ================================================================ */
 import { reactive } from 'vue'
-import { CONFIG } from '../config.js'
 import { todayKey, pad2 } from './bridge.js'
 
 /* ---------------- 桥接调用日志（开发辅助，仅控制台输出） ---------------- */
@@ -87,8 +86,17 @@ export const state = reactive({
   // 内网连通性（组合A：连上公司 WiFi 才能访问内网 API = 在岗，替代定位/围栏/考勤点）
   net: { status: 'idle', api: '', checkedAt: 0, error: '' }, // idle | loading | ok | error
   clock: { status: 'idle' }, // idle | locating(检测内网) | submitting | success
-  shifts: CONFIG.SHIFTS.map((s) => ({ ...s })),  // 当前生效班次（双行政班，改班次时间需发版）
-  records: []               // 全部本地打卡记录 [{type,shift,status,date,time,ts,network,source,recordId,mock?}]
+  // 今日打卡计划（后端时刻表下发，替代原双班次写死模型）
+  punch: {
+    loading: false,
+    user: null,        // 后端用户 {userId,userName,deptName,phone,ruleId}
+    times: [],         // 今日时刻表 [{timeId,expectTime,startTime,endTime,timeRemark}]
+    punched: 0,        // 今日已打卡次数（服务端）
+    required: 0,       // 今日应打卡次数
+    todayRecords: [],  // 今日服务端打卡记录 [{recordId,userId,punchTime}]
+    rest: false        // 今日休息（无细则/无时刻）
+  },
+  records: []           // 全部本地打卡记录 [{seq,timeRemark,expectTime,status,date,time,ts,source,recordId,...}]
 })
 
 export function getTodayRecords() {

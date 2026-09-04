@@ -26,10 +26,12 @@
         <!-- <text class="hero-clock-label">CURRENT TIME</text>
         <text class="hero-time num">{{ timeText }}</text> -->
         <view class="hero-shift">
-          <text>今日班次 · 行政班</text>
-          <text v-for="(s, i) in state.shifts" :key="s.id" class="shift-tag num" :class="{ active: i === activeShiftIndex }">
-            {{ s.name }} {{ s.start }}-{{ s.end }}
+          <text>今日打卡安排</text>
+          <text v-for="(t, i) in state.punch.times" :key="t.timeId != null ? t.timeId : i" class="shift-tag num" :class="{ active: i === nextPunchIndex }">
+            {{ t.timeRemark || ('打卡' + (i + 1)) }} {{ t.expectTime }}
           </text>
+          <text v-if="state.punch.rest" class="shift-tag num">今日休息</text>
+          <text v-if="!state.punch.times.length && !state.punch.rest && state.punch.loading" class="shift-tag num">加载中…</text>
         </view>
       </view>
     </view>
@@ -132,7 +134,7 @@
             <text class="tl-time num">{{ row.rec ? row.rec.time : '' }}</text>
             <text v-if="row.rec" class="tl-badge" :class="row.rec.status">{{ statusText[row.rec.status] || row.rec.status }}</text>
           </view>
-          <text class="tl-sub">{{ row.rec ? recordSub(row.rec) : '未打卡' }}</text>
+          <text class="tl-sub">{{ row.rec ? recordSub(row.rec) : (row.window ? '打卡窗口 ' + row.window : '未打卡') }}</text>
         </view>
       </view>
     </view>
@@ -142,7 +144,7 @@
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
         <path d="M12 9v4" /><path d="M12 17h.01" /><path d="M10.3 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.7 3.86a2 2 0 0 0-3.4 0Z" />
       </svg>
-      <text>演示模式：后台 springboot2-dkxt 接口未接入，当前使用静态数据演示（内网连通性模拟通过）。上线时把 USE_MOCK 改为 false 并填 INTRANET_APIS，打卡改为真实内网校验——连接公司 WiFi 才能提交，否则提示重试。接口约定见 config.js 注释。</text>
+      <text>演示模式：后台 kaoqin-backend 接口未接入，当前使用静态数据演示（内网连通性模拟通过）。上线时把 USE_MOCK 改为 false 并填 INTRANET_APIS，打卡改为真实内网校验——连接公司 WiFi 才能提交，否则提示重试。接口约定见 config.js 注释。</text>
     </view>
 
     <view class="footer-note">桂平市融媒体中心 · 考勤系统</view>
@@ -219,7 +221,7 @@ import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { onShow } from '@dcloudio/uni-app'
 import { CONFIG } from '@/config.js'
 import { state, getTodayRecords, saveDebugMobile, clearDebugLogs } from '@/utils/store.js'
-import { initApp, checkNet, doClock, getNextClockAction, loginApp, toast } from '@/utils/attendance.js'
+import { initApp, checkNet, doClock, refreshTodaySchedule, loginApp, toast } from '@/utils/attendance.js'
 import { Env, pad2, todayKey } from '@/utils/bridge.js'
 
 const statusText = { normal: '正常', late: '迟到', early: '早退' }
@@ -270,10 +272,18 @@ const greetText = computed(() => {
   return h < 6 ? '夜班辛苦了' : h < 12 ? '上午好' : h < 14 ? '中午好' : h < 18 ? '下午好' : '晚上好'
 })
 
-/* 班次（双班次：下一个打卡动作所在的班次高亮） */
-const nextAction = computed(() => getNextClockAction())
-const clockType = computed(() => nextAction.value.type)
-const activeShiftIndex = computed(() => nextAction.value.type === 'done' ? -1 : nextAction.value.shiftIndex)
+/* 今日打卡计划（后端时刻表驱动，替代原双班次写死模型） */
+const punchDone = computed(() => {
+  if (state.punch.rest) return true
+  const total = state.punch.required || state.punch.times.length
+  return total > 0 && state.punch.punched >= total
+})
+const nextPunchIndex = computed(() => (state.punch.rest ? -1 : state.punch.punched))
+const nextPunch = computed(() => {
+  if (state.punch.rest) return null
+  const times = state.punch.times || []
+  return times[state.punch.punched] || null
+})
 
 /* 打卡圆环 */
 const clockStatus = computed(() => state.clock.status)
@@ -282,19 +292,20 @@ const ringClass = computed(() => {
   const st = state.clock.status
   if (st === 'success') cls.push('success')
   if (st === 'idle') {
-    const blocked = state.net.status === 'error' || clockType.value === 'done'
+    const blocked = state.net.status === 'error' || punchDone.value
     if (blocked) cls.push('disabled')
   }
   return cls.join(' ')
 })
 const ringSubText = computed(() => {
-  const a = nextAction.value
-  if (a.type === 'done') return '今日打卡'
-  return `${a.shift.name}${a.type === 'clockIn' ? '上班' : '下班'}打卡`
+  if (state.punch.rest) return '今日休息'
+  const np = nextPunch.value
+  if (!np) return '今日打卡'
+  return np.timeRemark || `第${state.punch.punched + 1}次打卡`
 })
 const ringMainText = computed(() => {
-  const t = clockType.value
-  return t === 'clockIn' ? '上 班' : t === 'clockOut' ? '下 班' : '已完成'
+  if (state.punch.rest) return '休 息'
+  return nextPunch.value ? '打 卡' : '已完成'
 })
 const ringAria = computed(() => ringSubText.value + '按钮')
 
@@ -334,33 +345,42 @@ const netChips = computed(() => {
   return chips
 })
 
-/* 今日记录（双班次：上午上班/上午下班/下午上班/下午下班 四行时间线） */
+/* 今日打卡时间线：后端时刻表 + 本地记录（含状态）为主，服务端今日记录（仅时间）兜底 */
+function srvTime(pt) {
+  if (!pt) return ''
+  const s = String(pt).replace('T', ' ')
+  const t = s.split(' ')[1]
+  return t ? t.slice(0, 8) : ''
+}
+const todayLocal = computed(() => getTodayRecords())
 const timelineRows = computed(() => {
-  const today = getTodayRecords()
-  const rows = []
-  for (const s of state.shifts) {
-    rows.push({
-      key: `${s.id}-in`,
-      label: `${s.name}上班`,
-      rec: today.find((r) => r.type === 'clockIn' && r.shift === s.id)
-    })
-    rows.push({
-      key: `${s.id}-out`,
-      label: `${s.name}下班`,
-      rec: today.find((r) => r.type === 'clockOut' && r.shift === s.id)
-    })
-  }
-  return rows
+  const times = state.punch.times || []
+  return times.map((t, i) => {
+    const seq = i + 1
+    const local = todayLocal.value.find((r) => r.seq === seq) || todayLocal.value[i]
+    const srv = (state.punch.todayRecords && state.punch.todayRecords[i]) || null
+    let rec = null
+    if (local) rec = { status: local.status || 'normal', time: local.time || '', expectTime: local.expectTime || t.expectTime || '' }
+    else if (srv) rec = { status: 'normal', time: srvTime(srv.punchTime), expectTime: t.expectTime || '' }
+    return {
+      key: t.timeId != null ? t.timeId : seq,
+      label: t.timeRemark || `第${seq}次打卡`,
+      window: (t.startTime && t.endTime) ? `${t.startTime}-${t.endTime}` : '',
+      rec
+    }
+  })
 })
 const todaySummary = computed(() => {
-  const total = state.shifts.length * 2
-  const n = getTodayRecords().length
+  if (state.punch.rest) return '今日休息'
+  const total = state.punch.required || state.punch.times.length
+  const n = state.punch.punched
+  if (!total) return ''
   return n >= total ? '已完成' : `${n} / ${total}`
 })
 function recordSub(rec) {
-  /* 新方案记录只有 network 标记；兼容旧版含地址的打卡记录 */
+  if (rec.expectTime) return `应打 ${rec.expectTime}`
   if (rec.address) return `${rec.address}${rec.distance != null ? ' · 距考勤点' + rec.distance + 'm' : ''}`
-  return rec.network === 'intranet' ? '公司内网打卡' : '演示打卡'
+  return '公司内网打卡'
 }
 
 function checkNetNow() {

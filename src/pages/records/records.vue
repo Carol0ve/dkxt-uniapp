@@ -29,7 +29,7 @@
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
         <path d="M12 9v4" /><path d="M12 17h.01" /><path d="M10.3 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.7 3.86a2 2 0 0 0-3.4 0Z" />
       </svg>
-      <text>演示模式：带「演示」标记的历史记录为模拟数据，今日打卡为真实本地数据。接入后台后由 /api/attendance/history 下发真实记录。</text>
+      <text>演示模式：带「演示」标记的历史记录为模拟数据，今日打卡为真实本地数据。接入后台 kaoqin-backend 后由服务端下发今日打卡记录。</text>
     </view>
 
     <!-- 按日分组的记录列表 -->
@@ -62,7 +62,7 @@
         <circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" />
       </svg>
       <text class="empty-title">暂无打卡记录</text>
-      <text class="empty-sub">{{ CONFIG.USE_MOCK ? '演示数据加载失败，请下拉刷新' : '后台接口接入后此处展示历史记录' }}</text>
+      <text class="empty-sub">{{ CONFIG.USE_MOCK ? '演示数据加载失败，请下拉刷新' : '暂无打卡记录，去打卡页打卡后此处展示' }}</text>
     </view>
 
     <view class="footer-note">桂平市融媒体中心 · 考勤系统</view>
@@ -70,15 +70,25 @@
 </template>
 
 <script setup>
-import { ref, computed } from 'vue'
+import { computed } from 'vue'
 import { onShow, onPullDownRefresh } from '@dcloudio/uni-app'
 import { CONFIG } from '@/config.js'
 import { state, logBridge } from '@/utils/store.js'
+import { refreshTodaySchedule } from '@/utils/attendance.js'
 import { pad2 } from '@/utils/bridge.js'
 
 const statusText = { normal: '正常', late: '迟到', early: '早退' }
-const remoteLoaded = ref(false)
-const remoteRecords = ref([])
+
+function todayStr() {
+  const d = new Date()
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`
+}
+function srvTime(pt) {
+  if (!pt) return ''
+  const s = String(pt).replace('T', ' ')
+  const t = s.split(' ')[1]
+  return t ? t.slice(0, 8) : ''
+}
 
 /* ---------------- 演示历史数据（仅 USE_MOCK，标注 mock:true，不入库） ----------------
  * 双班次：每个工作日4条（上午上班/上午下班/下午上班/下午下班） */
@@ -101,17 +111,34 @@ function seedMockHistory() {
 }
 const mockRecords = CONFIG.USE_MOCK ? seedMockHistory() : []
 
-/* ---------------- 数据合并：真实本地记录 + 演示数据（或远程记录） ---------------- */
+/* ---------------- 数据合并：本地记录（含状态）为主 + 服务端今日记录（仅时间）兜底 ---------------- */
 const merged = computed(() => {
-  if (!CONFIG.USE_MOCK) {
-    return remoteLoaded.value ? remoteRecords.value : state.records.slice()
+  if (CONFIG.USE_MOCK) {
+    /* Mock 模式：真实记录优先，演示数据补充没有真实记录的日期（不含今天） */
+    const real = state.records.slice()
+    const realDates = new Set(real.map((r) => r.date))
+    const fill = mockRecords.filter((m) => !realDates.has(m.date) && m.date !== todayStr())
+    return real.concat(fill)
   }
-  /* Mock 模式：真实记录优先，演示数据补充没有真实记录的日期（不含今天） */
+  /* 真实模式：本地记录为准；本地今日记录少于服务端时用服务端补齐（换机/清缓存场景） */
   const real = state.records.slice()
-  const realDates = new Set(real.map((r) => r.date))
-  const today = `${new Date().getFullYear()}-${pad2(new Date().getMonth() + 1)}-${pad2(new Date().getDate())}`
-  const fill = mockRecords.filter((m) => !realDates.has(m.date) && m.date !== today)
-  return real.concat(fill)
+  const srvToday = (state.punch.todayRecords || []).slice()
+  const localTodayCount = real.filter((r) => r.date === todayStr()).length
+  if (srvToday.length > localTodayCount) {
+    for (let i = localTodayCount; i < srvToday.length; i++) {
+      real.push({
+        recordId: srvToday[i].recordId,
+        seq: i + 1,
+        timeRemark: '',
+        expectTime: '',
+        status: 'normal',
+        date: todayStr(),
+        time: srvTime(srvToday[i].punchTime),
+        source: 'server'
+      })
+    }
+  }
+  return real
 })
 
 /* ---------------- 按日分组（倒序） ---------------- */
@@ -123,8 +150,11 @@ const groups = computed(() => {
   }
   const today = `${new Date().getFullYear()}-${pad2(new Date().getMonth() + 1)}-${pad2(new Date().getDate())}`
   const weeks = ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
-  /* 班次内排序：上午上班 → 上午下班 → 下午上班 → 下午下班 */
-  const rowOrder = (r) => ((r.shift === 'pm' ? 1 : 0) * 2) + (r.type === 'clockOut' ? 1 : 0)
+  /* 班次内排序：按 seq（后端第几次打卡），兼容旧版双班次 type/shift */
+  const rowOrder = (r) => {
+    if (r.seq != null) return r.seq
+    return ((r.shift === 'pm' ? 1 : 0) * 2) + (r.type === 'clockOut' ? 1 : 0)
+  }
   return Object.keys(byDate).sort().reverse().map((date) => {
     const rows = byDate[date].slice().sort((a, b) => rowOrder(a) - rowOrder(b))
     const d = new Date(date.replace(/-/g, '/'))
@@ -144,7 +174,7 @@ const stats = computed(() => {
   const days = new Set()
   let normal = 0, late = 0, early = 0
   for (const r of merged.value) {
-    if (r.type === 'clockIn') days.add(r.date)
+    if (r.time) days.add(r.date)
     if (r.status === 'normal') normal++
     else if (r.status === 'late') late++
     else if (r.status === 'early') early++
@@ -152,38 +182,23 @@ const stats = computed(() => {
   return { days: days.size, normal, late, early }
 })
 
-const rangeText = computed(() => (CONFIG.USE_MOCK ? '近14天 · 本机记录 + 演示数据' : '全部记录'))
+const rangeText = computed(() => (CONFIG.USE_MOCK ? '近14天 · 本机记录 + 演示数据' : '本机记录 + 服务端今日打卡'))
 
-/* 行标签：上午上班 / 上午下班 / 下午上班 / 下午下班 */
+/* 行标签：优先后端 timeRemark（如「早上班卡」），兼容旧版双班次 */
 function rowLabel(r) {
+  if (r.timeRemark) return r.timeRemark
   const shiftName = r.shift === 'am' ? '上午' : r.shift === 'pm' ? '下午' : ''
   return `${shiftName}${r.type === 'clockIn' ? '上班' : '下班'}`
 }
 
-/* ---------------- 远程历史加载（USE_MOCK=false 时） ---------------- */
+/* ---------------- 拉取今日打卡（USE_MOCK=false 时），供服务端补齐本地缺失的今日记录 ---------------- */
 async function loadRemote() {
-  if (CONFIG.USE_MOCK || !CONFIG.API_BASE) return
+  if (CONFIG.USE_MOCK) return
   try {
-    const uid = (state.user.parsed && state.user.parsed.uid) || 'guest'
-    const res = await fetch(`${CONFIG.API_BASE}/api/attendance/history?userId=${encodeURIComponent(uid)}`)
-    const json = await res.json()
-    if (json.code === 200 && json.data && Array.isArray(json.data.list)) {
-      const rows = []
-      for (const day of json.data.list) {
-        /* 双班次结构：{ date, am: {clockIn, clockOut}, pm: {clockIn, clockOut} } */
-        for (const shiftId of ['am', 'pm']) {
-          const sh = day[shiftId]
-          if (!sh) continue
-          if (sh.clockIn) rows.push({ type: 'clockIn', shift: shiftId, date: day.date, time: sh.clockIn.time, status: sh.clockIn.status || 'normal', address: sh.clockIn.address || '' })
-          if (sh.clockOut) rows.push({ type: 'clockOut', shift: shiftId, date: day.date, time: sh.clockOut.time, status: sh.clockOut.status || 'normal', address: sh.clockOut.address || '' })
-        }
-      }
-      remoteRecords.value = rows
-      remoteLoaded.value = true
-      logBridge('loadHistory', `已加载 ${rows.length} 条远程记录`)
-    }
+    await refreshTodaySchedule()
+    logBridge('loadHistory', `今日服务端 ${(state.punch.todayRecords || []).length} 条记录`)
   } catch (e) {
-    logBridge('loadHistory', '接口不可达: ' + e.message, true)
+    logBridge('loadHistory', '接口不可达: ' + (e && e.message), true)
   }
 }
 
